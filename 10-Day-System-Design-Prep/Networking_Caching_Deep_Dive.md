@@ -1797,47 +1797,1641 @@ When to use GraphQL:
 
 ## 📡 Topic 2: Caching Strategies
 
-### 🎈 BEGINNER LEVEL
+### 🎈 BEGINNER LEVEL - What is Caching?
 
-**What is Caching?**
+**Real-World Analogy:**
 
-Think of caching like your brain's memory:
-- You remember your friend's phone number (cache)
-- Instead of looking it up in contacts every time (network request)
-- You just recall it from memory (much faster!)
+Imagine you're a student studying for exams:
+- **No Cache:** Every time you need a formula, you go to the library, search for the textbook, find the page (takes 10 minutes)
+- **With Cache:** You write frequently used formulas on a sticky note on your desk (takes 2 seconds)
 
-**Why Cache?**
-1. **Speed** - Instant access
-2. **Offline** - Works without internet
-3. **Cost** - Save bandwidth and battery
-4. **UX** - No loading spinners
+That sticky note is your **cache**!
 
-**Simple Cache:**
+**Why Do We Cache?**
+
+1. **Speed** - Memory access is 1000x faster than network
+2. **Offline Support** - App works without internet
+3. **Reduced Costs** - Save bandwidth and server load
+4. **Better UX** - No loading spinners
+5. **Battery Life** - Network requests drain battery
+
+**Cache Hierarchy (Fastest to Slowest):**
+
+```
+Level 1: CPU Cache (nanoseconds) - Not accessible to us
+Level 2: RAM/Memory Cache (microseconds) - NSCache
+Level 3: Disk Cache (milliseconds) - FileManager
+Level 4: Network (seconds) - URLSession
+```
+
+**Simple Dictionary Cache:**
 
 ```swift
-// Simplest cache - Dictionary
+// Beginner's first cache - Just a dictionary!
 class SimpleCache {
-    private var storage: [String: String] = [:]
+    private var storage: [String: Data] = [:]
     
-    func save(_ value: String, forKey key: String) {
-        storage[key] = value
+    func save(_ data: Data, forKey key: String) {
+        storage[key] = data
+        print("✅ Saved \(key) - Cache size: \(storage.count)")
     }
     
-    func get(forKey key: String) -> String? {
-        return storage[key]
-    }
-    
-    func remove(forKey key: String) {
-        storage.removeValue(forKey: key)
+    func get(forKey key: String) -> Data? {
+        if let data = storage[key] {
+            print("🎯 Cache HIT for \(key)")
+            return data
+        } else {
+            print("❌ Cache MISS for \(key)")
+            return nil
+        }
     }
     
     func clear() {
         storage.removeAll()
+        print("🗑️ Cache cleared")
+    }
+}
+
+// Usage Example
+let cache = SimpleCache()
+
+// Save user data
+let userData = "John Doe".data(using: .utf8)!
+cache.save(userData, forKey: "user_123")
+
+// Retrieve it
+if let cached = cache.get(forKey: "user_123") {
+    let name = String(data: cached, encoding: .utf8)
+    print("Got name from cache: \(name!)") // Fast! No network call
+}
+
+// Try to get something not cached
+cache.get(forKey: "user_999") // Cache MISS - need to fetch from network
+```
+
+**Problem with Simple Dictionary Cache:**
+
+```swift
+// ⚠️ DANGER: Memory explosion!
+let imageCache = SimpleCache()
+
+// Download 100 images (each 5MB)
+for i in 1...100 {
+    let image = downloadLargeImage(id: i) // 5MB each
+    let imageData = image.jpegData(compressionQuality: 1.0)!
+    imageCache.save(imageData, forKey: "image_\(i)")
+}
+
+// Result: 500MB in memory! 💥 App crashes!
+```
+
+**We need:**
+1. **Size limits** - Don't use all memory
+2. **Eviction policy** - Remove old items when full
+3. **Thread safety** - Multiple threads accessing cache
+4. **Memory warnings** - Clear cache when iOS asks
+
+***
+
+### 🚀 INTERMEDIATE LEVEL - NSCache & Disk Caching
+
+**NSCache - Apple's Built-in Memory Cache**
+
+NSCache solves all the problems of dictionary caching:
+
+```swift
+import Foundation
+
+// MARK: - NSCache Introduction
+
+class ImageCacheManager {
+    // NSCache is thread-safe and auto-evicts under memory pressure
+    private let memoryCache = NSCache<NSString, UIImage>()
+    
+    init() {
+        // Configure cache limits
+        memoryCache.countLimit = 100        // Max 100 images
+        memoryCache.totalCostLimit = 50 * 1024 * 1024  // Max 50MB
+        
+        // Listen for memory warnings
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(clearCache),
+            name: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil
+        )
+    }
+    
+    func cacheImage(_ image: UIImage, forKey key: String) {
+        // Calculate image size in bytes
+        let imageSize = image.jpegData(compressionQuality: 1.0)?.count ?? 0
+        
+        // Store with cost (helps NSCache make eviction decisions)
+        memoryCache.setObject(image, forKey: key as NSString, cost: imageSize)
+        
+        print("✅ Cached image '\(key)' - Size: \(imageSize / 1024)KB")
+    }
+    
+    func getImage(forKey key: String) -> UIImage? {
+        if let cached = memoryCache.object(forKey: key as NSString) {
+            print("🎯 Memory cache HIT: \(key)")
+            return cached
+        }
+        print("❌ Memory cache MISS: \(key)")
+        return nil
+    }
+    
+    @objc private func clearCache() {
+        memoryCache.removeAllObjects()
+        print("⚠️ Memory warning - Cache cleared!")
     }
 }
 
 // Usage
-let cache = SimpleCache()
-cache.save("John Doe", forKey: "user_name")
-let name = cache.get(forKey: "user_name")  // "John Doe"
+let cacheManager = ImageCacheManager()
+
+// Cache an image
+if let image = UIImage(named: "profile") {
+    cacheManager.cacheImage(image, forKey: "user_123_avatar")
+}
+
+// Retrieve it instantly
+if let cachedImage = cacheManager.getImage(forKey: "user_123_avatar") {
+    imageView.image = cachedImage  // Instant! No network call
+}
 ```
+
+**Key NSCache Features:**
+
+1. **Thread-safe** - No need for locks
+2. **Auto-eviction** - Removes items when memory is low
+3. **Cost-based** - Smart eviction using cost parameter
+4. **Count limit** - Maximum number of items
+5. **Total cost limit** - Maximum total size
+
+**NSCache Eviction Policy:**
+
+```swift
+class NSCacheExplained {
+    let cache = NSCache<NSString, NSData>()
+    
+    func demonstrateEviction() {
+        // Set limits
+        cache.countLimit = 3  // Only 3 items max
+        
+        // Add items
+        cache.setObject("Data 1".data(using: .utf8)! as NSData, forKey: "1")
+        cache.setObject("Data 2".data(using: .utf8)! as NSData, forKey: "2")
+        cache.setObject("Data 3".data(using: .utf8)! as NSData, forKey: "3")
+        
+        print("Cache is full (3 items)")
+        
+        // Add 4th item - NSCache will evict one automatically
+        cache.setObject("Data 4".data(using: .utf8)! as NSData, forKey: "4")
+        
+        // NSCache decides which one to evict (usually least recently used)
+        // You can't control which one it removes!
+    }
+}
+```
+
+***
+
+### **Disk Caching - Persistent Storage**
+
+Memory cache is lost when app terminates. Disk cache persists.
+
+```swift
+import Foundation
+
+class DiskCacheManager {
+    private let fileManager = FileManager.default
+    private let cacheDirectory: URL
+    
+    init() {
+        // Use iOS Caches directory (can be purged by system)
+        let paths = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)
+        cacheDirectory = paths[0].appendingPathComponent("ImageCache")
+        
+        // Create directory if it doesn't exist
+        try? fileManager.createDirectory(at: cacheDirectory, 
+                                         withIntermediateDirectories: true)
+        
+        print("📁 Cache directory: \(cacheDirectory.path)")
+    }
+    
+    // MARK: - Save to Disk
+    func saveToDisk(_ data: Data, forKey key: String) {
+        let fileURL = cacheDirectory.appendingPathComponent(key)
+        
+        do {
+            try data.write(to: fileURL)
+            print("✅ Saved to disk: \(key) (\(data.count / 1024)KB)")
+        } catch {
+            print("❌ Failed to save: \(error)")
+        }
+    }
+    
+    // MARK: - Load from Disk
+    func loadFromDisk(forKey key: String) -> Data? {
+        let fileURL = cacheDirectory.appendingPathComponent(key)
+        
+        do {
+            let data = try Data(contentsOf: fileURL)
+            print("🎯 Loaded from disk: \(key) (\(data.count / 1024)KB)")
+            return data
+        } catch {
+            print("❌ Not found on disk: \(key)")
+            return nil
+        }
+    }
+    
+    // MARK: - Delete from Disk
+    func deleteFromDisk(forKey key: String) {
+        let fileURL = cacheDirectory.appendingPathComponent(key)
+        try? fileManager.removeItem(at: fileURL)
+        print("🗑️ Deleted from disk: \(key)")
+    }
+    
+    // MARK: - Clear All Cache
+    func clearDiskCache() {
+        guard let files = try? fileManager.contentsOfDirectory(at: cacheDirectory, 
+                                                               includingPropertiesForKeys: nil) else {
+            return
+        }
+        
+        for file in files {
+            try? fileManager.removeItem(at: file)
+        }
+        
+        print("🗑️ Cleared all disk cache (\(files.count) files)")
+    }
+    
+    // MARK: - Get Cache Size
+    func getCacheSize() -> Int {
+        guard let files = try? fileManager.contentsOfDirectory(at: cacheDirectory, 
+                                                               includingPropertiesForKeys: [.fileSizeKey]) else {
+            return 0
+        }
+        
+        let totalSize = files.reduce(0) { total, file in
+            let size = (try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+            return total + size
+        }
+        
+        print("📊 Total cache size: \(totalSize / 1024 / 1024)MB")
+        return totalSize
+    }
+}
+
+// Usage
+let diskCache = DiskCacheManager()
+
+// Save image to disk
+if let imageData = UIImage(named: "photo")?.jpegData(compressionQuality: 0.8) {
+    diskCache.saveToDisk(imageData, forKey: "photo_123.jpg")
+}
+
+// Load it back (even after app restart!)
+if let data = diskCache.loadFromDisk(forKey: "photo_123.jpg"),
+   let image = UIImage(data: data) {
+    imageView.image = image
+}
+
+// Check cache size
+diskCache.getCacheSize()
+
+// Clear old cache
+diskCache.clearDiskCache()
+```
+
+***
+
+### **Two-Level Cache - Best of Both Worlds**
+
+Combine memory (fast) + disk (persistent):
+
+```swift
+class TwoLevelImageCache {
+    // Level 1: Fast memory cache
+    private let memoryCache = NSCache<NSString, UIImage>()
+    
+    // Level 2: Persistent disk cache
+    private let diskCache = DiskCacheManager()
+    
+    init() {
+        memoryCache.countLimit = 50
+        memoryCache.totalCostLimit = 30 * 1024 * 1024  // 30MB
+    }
+    
+    // MARK: - Get Image (Check both levels)
+    func getImage(forKey key: String) -> UIImage? {
+        // 1. Check memory first (fastest)
+        if let memoryImage = memoryCache.object(forKey: key as NSString) {
+            print("🎯 L1 Cache HIT (memory): \(key)")
+            return memoryImage
+        }
+        
+        // 2. Check disk (slower but still fast)
+        if let diskData = diskCache.loadFromDisk(forKey: key),
+           let diskImage = UIImage(data: diskData) {
+            print("🎯 L2 Cache HIT (disk): \(key)")
+            
+            // Promote to memory cache for next time
+            memoryCache.setObject(diskImage, forKey: key as NSString)
+            
+            return diskImage
+        }
+        
+        print("❌ Cache MISS (both levels): \(key)")
+        return nil
+    }
+    
+    // MARK: - Cache Image (Save to both levels)
+    func cacheImage(_ image: UIImage, forKey key: String) {
+        // 1. Save to memory (fast access)
+        memoryCache.setObject(image, forKey: key as NSString)
+        
+        // 2. Save to disk (persistent)
+        if let imageData = image.jpegData(compressionQuality: 0.8) {
+            diskCache.saveToDisk(imageData, forKey: key)
+        }
+        
+        print("✅ Cached in both levels: \(key)")
+    }
+    
+    // MARK: - Remove from Cache
+    func removeImage(forKey key: String) {
+        memoryCache.removeObject(forKey: key as NSString)
+        diskCache.deleteFromDisk(forKey: key)
+    }
+}
+
+// Usage with UITableView
+class ImageCell: UITableViewCell {
+    let imageCache = TwoLevelImageCache()
+    
+    func configure(imageURL: String) {
+        // Try cache first
+        if let cachedImage = imageCache.getImage(forKey: imageURL) {
+            self.imageView?.image = cachedImage
+            return  // Done! No network call needed
+        }
+        
+        // Not cached - download it
+        downloadImage(from: imageURL) { [weak self] image in
+            guard let self = self, let image = image else { return }
+            
+            // Cache for next time
+            self.imageCache.cacheImage(image, forKey: imageURL)
+            
+            // Update UI
+            DispatchQueue.main.async {
+                self.imageView?.image = image
+            }
+        }
+    }
+    
+    func downloadImage(from url: String, completion: @escaping (UIImage?) -> Void) {
+        // Network download implementation
+    }
+}
+```
+
+**Performance Comparison:**
+
+```
+Network request:     1000ms  (1 second)
+Disk cache:          50ms    (20x faster)
+Memory cache:        1ms     (1000x faster!)
+```
+
+
+### 💎 ADVANCED LEVEL - LRU Cache Implementation
+
+**What is LRU (Least Recently Used)?**
+
+Think of a music playlist:
+- Songs you play often stay in "Recently Played"
+- Songs you haven't played in months get removed
+- Most recently played song goes to top
+
+**LRU Cache Rules:**
+1. **Fixed capacity** - Max N items
+2. **Most recently used** - Goes to front
+3. **Least recently used** - Gets evicted when full
+4. **O(1) operations** - Get and Put must be constant time
+
+**Data Structure:** HashMap + Doubly Linked List
+
+```swift
+// MARK: - LRU Cache Node (Doubly Linked List)
+
+class LRUNode<Key: Hashable, Value> {
+    var key: Key
+    var value: Value
+    var prev: LRUNode?
+    var next: LRUNode?
+    
+    init(key: Key, value: Value) {
+        self.key = key
+        self.value = value
+    }
+}
+
+// MARK: - Production-Grade LRU Cache
+
+class LRUCache<Key: Hashable, Value> {
+    private let capacity: Int
+    private var cache: [Key: LRUNode<Key, Value>] = [:]
+    
+    // Dummy head and tail for easier list manipulation
+    private let head = LRUNode<Key, Value>(key: "" as! Key, value: "" as! Value)
+    private let tail = LRUNode<Key, Value>(key: "" as! Key, value: "" as! Value)
+    
+    private let lock = NSLock()  // Thread safety
+    
+    init(capacity: Int) {
+        self.capacity = capacity
+        
+        // Connect head and tail
+        head.next = tail
+        tail.prev = head
+    }
+    
+    // MARK: - Get (O(1))
+    func get(_ key: Key) -> Value? {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        guard let node = cache[key] else {
+            return nil
+        }
+        
+        // Move to front (most recently used)
+        moveToHead(node)
+        
+        return node.value
+    }
+    
+    // MARK: - Put (O(1))
+    func put(_ key: Key, _ value: Value) {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        if let existingNode = cache[key] {
+            // Update value and move to front
+            existingNode.value = value
+            moveToHead(existingNode)
+        } else {
+            // Create new node
+            let newNode = LRUNode(key: key, value: value)
+            cache[key] = newNode
+            addToHead(newNode)
+            
+            // Check capacity
+            if cache.count > capacity {
+                // Remove least recently used (tail.prev)
+                if let lruNode = tail.prev, lruNode !== head {
+                    removeNode(lruNode)
+                    cache.removeValue(forKey: lruNode.key)
+                }
+            }
+        }
+    }
+    
+    // MARK: - Remove
+    func remove(_ key: Key) {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        guard let node = cache[key] else { return }
+        
+        removeNode(node)
+        cache.removeValue(forKey: key)
+    }
+    
+    // MARK: - Clear
+    func clear() {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        cache.removeAll()
+        head.next = tail
+        tail.prev = head
+    }
+    
+    // MARK: - Private Helper Methods
+    
+    private func addToHead(_ node: LRUNode<Key, Value>) {
+        node.prev = head
+        node.next = head.next
+        head.next?.prev = node
+        head.next = node
+    }
+    
+    private func removeNode(_ node: LRUNode<Key, Value>) {
+        node.prev?.next = node.next
+        node.next?.prev = node.prev
+    }
+    
+    private func moveToHead(_ node: LRUNode<Key, Value>) {
+        removeNode(node)
+        addToHead(node)
+    }
+    
+    // MARK: - Debug
+    func printCache() {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        var current = head.next
+        var items: [String] = []
+        
+        while current !== tail {
+            items.append("\(current!.key)")
+            current = current?.next
+        }
+        
+        print("Cache (MRU → LRU): \(items.joined(separator: " → "))")
+    }
+}
+
+// MARK: - Usage Example
+
+let cache = LRUCache<String, UIImage>(capacity: 3)
+
+// Add images
+cache.put("image1", UIImage(named: "photo1")!)
+cache.put("image2", UIImage(named: "photo2")!)
+cache.put("image3", UIImage(named: "photo3")!)
+
+cache.printCache()
+// Output: Cache (MRU → LRU): image3 → image2 → image1
+
+// Access image1 (becomes most recently used)
+_ = cache.get("image1")
+
+cache.printCache()
+// Output: Cache (MRU → LRU): image1 → image3 → image2
+
+// Add image4 (cache is full, evicts image2 - least recently used)
+cache.put("image4", UIImage(named: "photo4")!)
+
+cache.printCache()
+// Output: Cache (MRU → LRU): image4 → image1 → image3
+
+// Try to get image2 (evicted!)
+if cache.get("image2") == nil {
+    print("image2 was evicted (LRU)")
+}
+```
+
+**Time Complexity:**
+- `get()`: O(1) - HashMap lookup + List update
+- `put()`: O(1) - HashMap insert + List update
+- `remove()`: O(1) - HashMap delete + List update
+
+**Space Complexity:** O(capacity)
+
+***
+
+### **Advanced: Size-Based LRU Cache**
+
+Instead of count, evict based on total size:
+
+```swift
+class SizeLRUCache<Key: Hashable> {
+    private let maxSize: Int  // In bytes
+    private var currentSize: Int = 0
+    
+    private var cache: [Key: SizeLRUNode] = [:]
+    private let head = SizeLRUNode(key: "" as! Key, data: Data(), size: 0)
+    private let tail = SizeLRUNode(key: "" as! Key, data: Data(), size: 0)
+    
+    private let lock = NSLock()
+    
+    class SizeLRUNode {
+        let key: Key
+        var data: Data
+        let size: Int
+        var prev: SizeLRUNode?
+        var next: SizeLRUNode?
+        
+        init(key: Key, data: Data, size: Int) {
+            self.key = key
+            self.data = data
+            self.size = size
+        }
+    }
+    
+    init(maxSize: Int) {
+        self.maxSize = maxSize
+        head.next = tail
+        tail.prev = head
+    }
+    
+    func get(_ key: Key) -> Data? {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        guard let node = cache[key] else {
+            return nil
+        }
+        
+        moveToHead(node)
+        return node.data
+    }
+    
+    func put(_ key: Key, _ data: Data) {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        let size = data.count
+        
+        // Remove existing if updating
+        if let existing = cache[key] {
+            currentSize -= existing.size
+            removeNode(existing)
+        }
+        
+        // Evict until we have space
+        while currentSize + size > maxSize && tail.prev !== head {
+            if let lru = tail.prev {
+                currentSize -= lru.size
+                removeNode(lru)
+                cache.removeValue(forKey: lru.key)
+                print("⚠️ Evicted \(lru.key) (\(lru.size / 1024)KB) - Cache full")
+            }
+        }
+        
+        // Add new node
+        let newNode = SizeLRUNode(key: key, data: data, size: size)
+        cache[key] = newNode
+        addToHead(newNode)
+        currentSize += size
+        
+        print("✅ Cached \(key) (\(size / 1024)KB) - Total: \(currentSize / 1024)KB / \(maxSize / 1024)KB")
+    }
+    
+    private func addToHead(_ node: SizeLRUNode) {
+        node.prev = head
+        node.next = head.next
+        head.next?.prev = node
+        head.next = node
+    }
+    
+    private func removeNode(_ node: SizeLRUNode) {
+        node.prev?.next = node.next
+        node.next?.prev = node.prev
+    }
+    
+    private func moveToHead(_ node: SizeLRUNode) {
+        removeNode(node)
+        addToHead(node)
+    }
+}
+
+// Usage
+let imageCache = SizeLRUCache<String>(maxSize: 10 * 1024 * 1024)  // 10MB max
+
+// Cache images
+let image1 = UIImage(named: "large1")!.jpegData(compressionQuality: 0.8)!  // 3MB
+let image2 = UIImage(named: "large2")!.jpegData(compressionQuality: 0.8)!  // 4MB
+let image3 = UIImage(named: "large3")!.jpegData(compressionQuality: 0.8)!  // 5MB
+
+imageCache.put("img1", image1)  // 3MB cached
+imageCache.put("img2", image2)  // 7MB total
+imageCache.put("img3", image3)  // 12MB total - evicts img1 (LRU)
+
+// img1 is evicted, img2 and img3 remain (9MB total < 10MB limit)
+```
+
+
+### **Production-Ready: Complete Caching System**
+
+Combining everything for FAANG-level implementation:
+
+```swift
+// MARK: - Complete Image Caching System
+
+actor ImageCachingSystem {
+    // Three-level cache hierarchy
+    private let memoryCache: NSCache<NSString, UIImage>
+    private let diskCache: DiskCache
+    private let lruCache: LRUCache<String, CacheMetadata>
+    
+    // Track ongoing downloads (avoid duplicates)
+    private var ongoingDownloads: [String: Task<UIImage?, Error>] = [:]
+    
+    // Configuration
+    private let memoryCacheSize: Int
+    private let diskCacheSize: Int
+    private let maxConcurrentDownloads = 3
+    
+    struct CacheMetadata {
+        let key: String
+        let size: Int
+        let timestamp: Date
+        let accessCount: Int
+    }
+    
+    init(
+        memoryCacheSize: Int = 50 * 1024 * 1024,  // 50MB
+        diskCacheSize: Int = 200 * 1024 * 1024     // 200MB
+    ) {
+        self.memoryCacheSize = memoryCacheSize
+        self.diskCacheSize = diskCacheSize
+        
+        // Setup memory cache
+        self.memoryCache = NSCache<NSString, UIImage>()
+        memoryCache.totalCostLimit = memoryCacheSize
+        memoryCache.countLimit = 100
+        
+        // Setup disk cache
+        self.diskCache = DiskCache(maxSize: diskCacheSize)
+        
+        // Setup LRU tracking
+        self.lruCache = LRUCache<String, CacheMetadata>(capacity: 200)
+        
+        // Setup memory warning observer
+        Task { @MainActor in
+            NotificationCenter.default.addObserver(
+                forName: UIApplication.didReceiveMemoryWarningNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task {
+                    await self?.handleMemoryWarning()
+                }
+            }
+        }
+    }
+    
+    // MARK: - Main Get Method
+    
+    func getImage(from url: URL, priority: TaskPriority = .medium) async throws -> UIImage {
+        let key = url.absoluteString
+        
+        // Level 1: Memory cache (fastest)
+        if let memoryImage = memoryCache.object(forKey: key as NSString) {
+            print("🎯 L1 HIT (memory): \(key)")
+            updateAccessMetadata(key: key)
+            return memoryImage
+        }
+        
+        // Level 2: Disk cache (fast)
+        if let diskData = await diskCache.load(key: key),
+           let diskImage = UIImage(data: diskData) {
+            print("🎯 L2 HIT (disk): \(key)")
+            
+            // Promote to memory
+            let imageSize = diskData.count
+            memoryCache.setObject(diskImage, forKey: key as NSString, cost: imageSize)
+            
+            updateAccessMetadata(key: key)
+            return diskImage
+        }
+        
+        // Level 3: Network (slow) - check for ongoing download first
+        if let existingTask = ongoingDownloads[key] {
+            print("⏳ Waiting for ongoing download: \(key)")
+            return try await existingTask.value ?? UIImage()
+        }
+        
+        // Start new download
+        print("📡 Downloading: \(key)")
+        let downloadTask = Task(priority: priority) {
+            try await self.downloadAndCache(url: url, key: key)
+        }
+        
+        ongoingDownloads[key] = downloadTask
+        
+        do {
+            let image = try await downloadTask.value
+            ongoingDownloads.removeValue(forKey: key)
+            return image ?? UIImage()
+        } catch {
+            ongoingDownloads.removeValue(forKey: key)
+            throw error
+        }
+    }
+    
+    // MARK: - Download & Cache
+    
+    private func downloadAndCache(url: URL, key: String) async throws -> UIImage? {
+        let (data, _) = try await URLSession.shared.data(from: url)
+        
+        guard let image = UIImage(data: data) else {
+            throw CacheError.invalidImage
+        }
+        
+        // Optimize image size
+        let optimizedData = optimizeImage(image)
+        let imageSize = optimizedData.count
+        
+        // Cache in memory
+        memoryCache.setObject(image, forKey: key as NSString, cost: imageSize)
+        
+        // Cache on disk
+        await diskCache.save(optimizedData, key: key)
+        
+        // Track in LRU
+        let metadata = CacheMetadata(
+            key: key,
+            size: imageSize,
+            timestamp: Date(),
+            accessCount: 1
+        )
+        lruCache.put(key, metadata)
+        
+        print("✅ Cached: \(key) (\(imageSize / 1024)KB)")
+        
+        return image
+    }
+    
+    // MARK: - Helper Methods
+    
+    private func optimizeImage(_ image: UIImage) -> Data {
+        // Resize if too large
+        let maxDimension: CGFloat = 2048
+        var optimized = image
+        
+        if image.size.width > maxDimension || image.size.height > maxDimension {
+            let scale = maxDimension / max(image.size.width, image.size.height)
+            let newSize = CGSize(
+                width: image.size.width * scale,
+                height: image.size.height * scale
+            )
+            
+            UIGraphicsBeginImageContextWithOptions(newSize, false, 0)
+            image.draw(in: CGRect(origin: .zero, size: newSize))
+            optimized = UIGraphicsGetImageFromCurrentImageContext() ?? image
+            UIGraphicsEndImageContext()
+        }
+        
+        // Compress
+        return optimized.jpegData(compressionQuality: 0.75) ?? Data()
+    }
+    
+    private func updateAccessMetadata(key: String) {
+        if let metadata = lruCache.get(key) {
+            let updated = CacheMetadata(
+                key: key,
+                size: metadata.size,
+                timestamp: Date(),
+                accessCount: metadata.accessCount + 1
+            )
+            lruCache.put(key, updated)
+        }
+    }
+    
+    private func handleMemoryWarning() {
+        print("⚠️ Memory warning - Clearing memory cache")
+        memoryCache.removeAllObjects()
+    }
+    
+    // MARK: - Cache Management
+    
+    func clearMemoryCache() {
+        memoryCache.removeAllObjects()
+        print("🗑️ Memory cache cleared")
+    }
+    
+    func clearDiskCache() async {
+        await diskCache.clear()
+        print("🗑️ Disk cache cleared")
+    }
+    
+    func clearAll() async {
+        clearMemoryCache()
+        await clearDiskCache()
+        lruCache.clear()
+        print("🗑️ All caches cleared")
+    }
+    
+    func getCacheSize() async -> (memory: Int, disk: Int) {
+        let diskSize = await diskCache.getSize()
+        return (memory: memoryCacheSize, disk: diskSize)
+    }
+}
+
+// MARK: - Disk Cache Actor
+
+actor DiskCache {
+    private let maxSize: Int
+    private let fileManager = FileManager.default
+    private let cacheDirectory: URL
+    
+    init(maxSize: Int) {
+        self.maxSize = maxSize
+        
+        let paths = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)
+        self.cacheDirectory = paths[0].appendingPathComponent("AdvancedImageCache")
+        
+        try? fileManager.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+    }
+    
+    func save(_ data: Data, key: String) {
+        let fileURL = cacheDirectory.appendingPathComponent(key.md5Hash)
+        try? data.write(to: fileURL)
+    }
+    
+    func load(key: String) -> Data? {
+        let fileURL = cacheDirectory.appendingPathComponent(key.md5Hash)
+        return try? Data(contentsOf: fileURL)
+    }
+    
+    func clear() {
+        guard let files = try? fileManager.contentsOfDirectory(at: cacheDirectory, includingPropertiesForKeys: nil) else {
+            return
+        }
+        
+        for file in files {
+            try? fileManager.removeItem(at: file)
+        }
+    }
+    
+    func getSize() -> Int {
+        guard let files = try? fileManager.contentsOfDirectory(at: cacheDirectory, includingPropertiesForKeys: [.fileSizeKey]) else {
+            return 0
+        }
+        
+        return files.reduce(0) { total, file in
+            let size = (try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+            return total + size
+        }
+    }
+}
+
+enum CacheError: Error {
+    case invalidImage
+}
+
+extension String {
+    var md5Hash: String {
+        // Simple hash for demo - use actual MD5 in production
+        return String(self.hashValue)
+    }
+}
+```
+
+***
+
+### **UITableView Integration Example:**
+
+```swift
+class ImageFeedViewController: UITableViewController {
+    let imageCache = ImageCachingSystem()
+    var imageURLs: [URL] = []
+    
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: "ImageCell", for: indexPath) as! ImageCell
+        let url = imageURLs[indexPath.row]
+        
+        cell.configure(with: url, cache: imageCache)
+        
+        return cell
+    }
+}
+
+class ImageCell: UITableViewCell {
+    @IBOutlet weak var photoImageView: UIImageView!
+    private var loadTask: Task<Void, Never>?
+    
+    func configure(with url: URL, cache: ImageCachingSystem) {
+        // Cancel previous load
+        loadTask?.cancel()
+        
+        // Show placeholder
+        photoImageView.image = UIImage(named: "placeholder")
+        
+        // Load image
+        loadTask = Task {
+            do {
+                let image = try await cache.getImage(from: url, priority: .userInitiated)
+                
+                guard !Task.isCancelled else { return }
+                
+                await MainActor.run {
+                    UIView.transition(
+                        with: self.photoImageView,
+                        duration: 0.3,
+                        options: .transitionCrossDissolve
+                    ) {
+                        self.photoImageView.image = image
+                    }
+                }
+            } catch {
+                print("Failed to load image: \(error)")
+            }
+        }
+    }
+    
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        loadTask?.cancel()
+        photoImageView.image = nil
+    }
+}
+```
+
+***
+<!-- INTERVIEW_QUESTIONS_START -->
+
+## 📝 CACHING STRATEGIES - INTERVIEW QUESTIONS
+
+### **Q1: Implement an LRU Cache with O(1) get and put operations**
+
+**What They're Testing:** Data structures knowledge, algorithm optimization
+
+**Expected Answer (Tech Lead Level):**
+
+```swift
+// Complete implementation shown above in Advanced section
+// Key points to mention:
+
+/*
+1. DATA STRUCTURES USED:
+   - HashMap: O(1) lookup
+   - Doubly Linked List: O(1) insertion/deletion
+   
+2. WHY DOUBLY LINKED LIST?
+   - Need to move nodes to front (most recently used)
+   - Need to remove nodes from middle
+   - Singly linked list can't remove from middle in O(1)
+   
+3. DUMMY HEAD & TAIL:
+   - Simplifies edge cases
+   - No need to check for null
+   - Cleaner code
+   
+4. OPERATIONS:
+   get(key):
+   - Check HashMap -> O(1)
+   - If found, move to head -> O(1)
+   - Return value
+   
+   put(key, value):
+   - Check if exists -> O(1)
+   - If yes: update value, move to head -> O(1)
+   - If no: add to head, check capacity
+   - If over capacity: remove tail.prev (LRU) -> O(1)
+   
+5. THREAD SAFETY:
+   - Add NSLock for concurrent access
+   - Lock before any operation
+   - Use defer to ensure unlock
+*/
+
+// Walk through example:
+let cache = LRUCache<String, Int>(capacity: 2)
+
+cache.put("A", 1)  // Cache: A
+cache.put("B", 2)  // Cache: B → A (B most recent)
+cache.get("A")     // Cache: A → B (A accessed, now most recent)
+cache.put("C", 3)  // Cache: C → A (B evicted as LRU)
+cache.get("B")     // nil (B was evicted)
+```
+
+**Follow-up Questions:**
+1. "How would you make it thread-safe?" → Add NSLock
+2. "How would you add expiration time?" → Add timestamp to node, check on get
+3. "What if you want to evict by size instead of count?" → Track total size, evict until under limit
+
+***
+
+### **Q2: Design a multi-level caching system for an Instagram-like feed. Explain your eviction strategy.**
+
+**What They're Testing:** System design, real-world problem solving, trade-off analysis
+
+**Expected Answer:**
+
+```swift
+/*
+REQUIREMENT ANALYSIS:
+- Feed has images (large files)
+- Users scroll fast (need instant loading)
+- Limited device storage
+- Works offline
+- Handles 1000s of images
+
+SOLUTION: Three-Level Cache Hierarchy
+
+LEVEL 1: MEMORY CACHE (NSCache)
+  - Capacity: 50MB
+  - Stores: Most recent ~50 images
+  - Eviction: Automatic by iOS
+  - Why: Instant access, no I/O
+  - Limitation: Lost on app restart
+
+LEVEL 2: DISK CACHE (FileManager)
+  - Capacity: 200MB
+  - Stores: ~200-500 images
+  - Eviction: LRU with timestamp
+  - Why: Persists across app restarts
+  - Limitation: Slower than memory
+
+LEVEL 3: NETWORK (URLSession)
+  - Capacity: Unlimited
+  - Stores: Everything
+  - Eviction: N/A
+  - Why: Source of truth
+  - Limitation: Slow, requires internet
+
+EVICTION STRATEGY:
+
+1. Memory Cache:
+   - Let NSCache handle automatically
+   - Set totalCostLimit based on device RAM
+   - Evicts LRU when memory pressure
+   
+2. Disk Cache:
+   - Custom LRU implementation
+   - Track last access time
+   - Evict oldest when exceeding 200MB
+   - Exception: Keep "favorited" images
+   
+3. Smart Prefetching:
+   - Prefetch next 10 images in scroll direction
+   - Lower priority tasks
+   - Cancel if user scrolls away
+*/
+
+// Implementation shown in production caching system above
+
+/*
+KEY DESIGN DECISIONS:
+
+Q: "Why three levels?"
+A: Speed vs Capacity trade-off. Memory is fastest but limited. Disk balances speed and capacity. Network is source of truth.
+
+Q: "Why LRU for disk?"
+A: Popular images stay cached. Users often scroll back to recent posts.
+
+Q: "Why NSCache for memory?"
+A: Handles memory pressure automatically. Don't want to crash on low-memory devices.
+
+Q: "Expiration policy?"
+A: 7 days for disk. Balance between freshness and bandwidth savings.
+
+Q: "Prefetching strategy?"
+A: Predict user behavior (scrolling down), prefetch at low priority to save bandwidth.
+*/
+```
+
+***
+
+### **Q3: How would you handle cache invalidation when data changes on the server?**
+
+**What They're Testing:** Cache coherency, real-world problems, API design
+
+**Expected Answer:**
+
+```swift
+/*
+CACHE INVALIDATION STRATEGIES:
+
+1. TIME-BASED EXPIRATION (TTL - Time To Live)
+   - Each cache entry has expiration timestamp
+   - Simple but may show stale data
+   
+2. VERSION-BASED INVALIDATION
+   - Server sends version/etag header
+   - Client checks version before using cache
+   - Efficient but requires server support
+   
+3. EVENT-BASED INVALIDATION
+   - Server pushes invalidation events
+   - WebSocket or Push Notifications
+   - Real-time but complex
+   
+4. ON-DEMAND INVALIDATION
+   - User triggers refresh (pull-to-refresh)
+   - Simple but relies on user action
+*/
+
+// Implementation:
+
+actor SmartCache<Key: Hashable, Value: Codable> {
+    private var cache: [Key: CacheEntry] = [:]
+    
+    struct CacheEntry {
+        let value: Value
+        let timestamp: Date
+        let version: String?
+        let ttl: TimeInterval
+        
+        var isExpired: Bool {
+            Date().timeIntervalSince(timestamp) > ttl
+        }
+    }
+    
+    // STRATEGY 1: TTL-Based
+    func get(_ key: Key, ttl: TimeInterval = 300) -> Value? {
+        guard let entry = cache[key] else { return nil }
+        
+        // Check if expired
+        if Date().timeIntervalSince(entry.timestamp) > ttl {
+            cache.removeValue(forKey: key)
+            return nil  // Force refresh
+        }
+        
+        return entry.value
+    }
+    
+    // STRATEGY 2: Version-Based (ETag)
+    func getWithVersionCheck(
+        _ key: Key,
+        currentVersion: String?,
+        fetch: () async throws -> (Value, String?)
+    ) async throws -> Value {
+        // Check cache
+        if let entry = cache[key],
+           !entry.isExpired {
+            
+            // Compare versions
+            if let cachedVersion = entry.version,
+               let serverVersion = currentVersion,
+               cachedVersion == serverVersion {
+                // Cache is fresh
+                return entry.value
+            }
+        }
+        
+        // Cache miss or stale - fetch fresh data
+        let (value, version) = try await fetch()
+        
+        // Update cache
+        cache[key] = CacheEntry(
+            value: value,
+            timestamp: Date(),
+            version: version,
+            ttl: 300
+        )
+        
+        return value
+    }
+    
+    // STRATEGY 3: Event-Based Invalidation
+    func invalidate(_ key: Key) {
+        cache.removeValue(forKey: key)
+        print("��️ Invalidated cache for: \(key)")
+    }
+    
+    func invalidateAll() {
+        cache.removeAll()
+        print("🗑️ Invalidated entire cache")
+    }
+}
+
+/*
+RECOMMENDATION FOR FAANG INTERVIEW:
+
+"I would use a COMBINATION approach:
+
+1. TTL for baseline (5 min for most data)
+2. ETags/Conditional Requests for efficiency
+3. WebSocket events for real-time updates
+4. Pull-to-refresh for user control
+
+Example:
+- User profile: 30 min TTL + ETag
+- Feed posts: 5 min TTL + WebSocket events
+- Static content: 24 hour TTL
+- User-generated content: ETag only
+
+This balances:
+✅ Performance (cache hits)
+✅ Freshness (not too stale)
+✅ Bandwidth (304 responses)
+✅ User control (manual refresh)
+"
+*/
+```
+
+***
+
+### **Q4: Explain the difference between NSCache and a Dictionary. When would you use each?**
+
+**What They're Testing:** iOS SDK knowledge, understanding of trade-offs
+
+**Expected Answer:**
+
+```swift
+/*
+NSCACHE vs DICTIONARY COMPARISON:
+
+┌─────────────────┬──────────────────┬─────────────────┐
+│ Feature         │ NSCache          │ Dictionary      │
+├─────────────────┼──────────────────┼─────────────────┤
+│ Thread Safety   │ ✅ Built-in       │ ❌ Manual needed │
+│ Auto Eviction   │ ✅ Memory pressure│ ❌ Never         │
+│ Memory Limit    │ ✅ Can set        │ ❌ Grows forever │
+│ Cost Tracking   │ ✅ Per-item cost  │ ❌ No concept    │
+│ Codable         │ ❌ No             │ ✅ Yes           │
+│ Persistence     │ ❌ Memory only    │ ❌ Memory only   │
+│ Subscripting    │ ❌ No [key]       │ ✅ Yes [key]     │
+│ Performance     │ Fast             │ Fastest         │
+└─────────────────┴──────────────────┴─────────────────┘
+
+WHEN TO USE NSCACHE:
+✅ Caching large objects (images, data)
+✅ Caching expensive computations
+✅ Multi-threaded access
+✅ Don't want to manually manage memory
+✅ System should auto-clear on low memory
+✅ OK with items disappearing
+
+WHEN TO USE DICTIONARY:
+✅ Small, critical data (settings, configs)
+✅ Need subscript syntax
+✅ Need to serialize (Codable)
+✅ Single-threaded access
+✅ Data must never disappear
+✅ Need dictionary operations (map, filter)
+*/
+
+// EXAMPLE 1: NSCache for Images
+class ImageCache {
+    private let cache = NSCache<NSString, UIImage>()
+    
+    init() {
+        // Configure limits
+        cache.countLimit = 100
+        cache.totalCostLimit = 50 * 1024 * 1024  // 50MB
+        
+        // Will auto-evict under memory pressure
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { [weak cache] _ in
+            cache?.removeAllObjects()
+        }
+    }
+}
+
+// EXAMPLE 2: Dictionary for Settings
+class SettingsManager {
+    // Small, critical data - must never disappear
+    private var settings: [String: Any] = [
+        "theme": "dark",
+        "notifications": true,
+        "language": "en"
+    ]
+    
+    // Thread safety if needed
+    private let queue = DispatchQueue(label: "settings")
+    
+    func getSetting<T>(_ key: String) -> T? {
+        return queue.sync {
+            return settings[key] as? T
+        }
+    }
+}
+
+/*
+INTERVIEW TIP:
+Always mention: "NSCache is designed for DISPOSABLE cached data that can be regenerated.
+If data is critical and can't be regenerated (auth tokens, user data), use Dictionary
+or better yet, persistent storage like Keychain or Core Data."
+*/
+```
+
+***
+
+### **Q5: Design an offline-first caching strategy for a ride-hailing app like Uber**
+
+**What They're Testing:** Real-world mobile app design, offline handling
+
+**Expected Answer:**
+
+```swift
+/*
+REQUIREMENTS:
+1. Show last known driver location even offline
+2. Cache recent trip history
+3. Save favorite locations
+4. Handle requests made offline
+5. Sync when online again
+
+ARCHITECTURE:
+
+┌─────────────────────────────────────────┐
+│         OFFLINE-FIRST LAYERS            │
+├─────────────────────────────────────────┤
+│ UI Layer (Always shows data)            │
+├─────────────────────────────────────────┤
+│ Cache Layer (Local truth)               │
+│  - Memory: Active trip data             │
+│  - Disk: Recent trips, favorites        │
+│  - Database: All persistent data        │
+├─────────────────────────────────────────┤
+│ Sync Layer (Background sync)            │
+│  - Queue pending requests               │
+│  - Sync when online                     │
+│  - Conflict resolution                  │
+├─────────────────────────────────────────┤
+│ Network Layer (Source of truth)         │
+└─────────────────────────────────────────┘
+
+CACHING STRATEGY:
+
+1. DRIVER LOCATION (Real-time, Memory Cache)
+   - Cache last 100 driver locations
+   - TTL: 30 seconds
+   - Update via WebSocket
+   - Fallback to cached when offline
+   
+2. TRIP HISTORY (Persistent, Disk Cache)
+   - Cache last 50 trips
+   - No TTL (permanent until cleared)
+   - Refresh on app launch
+   
+3. FAVORITE LOCATIONS (Critical, Database)
+   - Store in CoreData
+   - Never expire
+   - Sync changes when online
+   
+4. PENDING REQUESTS (Queue, Database)
+   - Trip cancellations
+   - Ratings
+   - Payment updates
+   - Replay when online
+
+IMPLEMENTATION:
+*/
+
+// Data Layer
+actor RideDataManager {
+    // Memory: Active trip
+    private var activeTrip: Trip?
+    
+    // Disk: Recent trips (LRU)
+    private let tripCache = LRUCache<String, Trip>(capacity: 50)
+    
+    // Database: Favorites
+    private let database: CoreDataStack
+    
+    // Sync queue
+    private let syncQueue: SyncQueue
+    
+    // Network monitor
+    private let networkMonitor: NetworkMonitor
+    
+    init() {
+        self.database = CoreDataStack()
+        self.syncQueue = SyncQueue()
+        self.networkMonitor = NetworkMonitor()
+        
+        // Monitor network changes
+        Task {
+            for await isConnected in networkMonitor.statusStream {
+                if isConnected {
+                    await syncPendingChanges()
+                }
+            }
+        }
+    }
+    
+    // MARK: - Read Operations (Offline-first)
+    
+    func getTripHistory() async -> [Trip] {
+        // 1. Return cached immediately
+        var trips: [Trip] = []
+        
+        // Get from cache
+        // (implementation details)
+        
+        // 2. Refresh in background if online
+        if await networkMonitor.isConnected {
+            Task {
+                let freshTrips = try? await fetchTripsFromServer()
+                // Update cache
+            }
+        }
+        
+        return trips
+    }
+    
+    func getFavoriteLocations() async -> [Location] {
+        // Always return from database (critical data)
+        return await database.fetchFavorites()
+    }
+    
+    // MARK: - Write Operations (Queue for sync)
+    
+    func cancelTrip(id: String) async {
+        // 1. Update local state immediately (optimistic update)
+        activeTrip?.status = .cancelled
+        
+        // 2. Queue for server sync
+        let operation = SyncOperation(
+            type: .cancelTrip,
+            payload: ["trip_id": id],
+            timestamp: Date()
+        )
+        await syncQueue.enqueue(operation)
+        
+        // 3. Attempt sync if online
+        if await networkMonitor.isConnected {
+            await syncPendingChanges()
+        }
+    }
+    
+    func addFavoriteLocation(_ location: Location) async {
+        // 1. Save to database immediately
+        await database.saveFavorite(location)
+        
+        // 2. Queue for sync
+        let operation = SyncOperation(
+            type: .addFavorite,
+            payload: location.toDictionary(),
+            timestamp: Date()
+        )
+        await syncQueue.enqueue(operation)
+        
+        // 3. Sync when online
+        if await networkMonitor.isConnected {
+            await syncPendingChanges()
+        }
+    }
+    
+    // MARK: - Sync Logic
+    
+    private func syncPendingChanges() async {
+        let operations = await syncQueue.getPending()
+        
+        for operation in operations {
+            do {
+                try await performSync(operation)
+                await syncQueue.markCompleted(operation.id)
+            } catch {
+                // Keep in queue for retry
+                print("Sync failed: \(error)")
+            }
+        }
+    }
+}
+
+/*
+KEY POINTS TO MENTION:
+
+1. OPTIMISTIC UPDATES:
+   - Update UI immediately
+   - Queue for server sync
+   - Rollback if sync fails
+
+2. CACHE LAYERS:
+   - Memory: Temporary, fast
+   - Disk: Recent data
+   - Database: Critical data
+
+3. SYNC STRATEGY:
+   - Queue all writes
+   - Sync when online
+   - Handle conflicts
+
+4. USER EXPERIENCE:
+   - App always works
+   - No loading spinners for cached data
+   - Show sync status indicator
+
+5. TRADE-OFFS:
+   - Stale data vs always working
+   - Storage space vs offline capability
+   - Complexity vs user experience
+*/
+```
+
+***
+
+## 🎯 Key Takeaways for FAANG Interviews
+
+**For NSCache:**
+- Mention automatic eviction under memory pressure
+- Discuss `totalCostLimit` and `countLimit`
+- Explain thread safety benefits
+- Know when NOT to use it (critical data)
+
+**For LRU Cache:**
+- Explain HashMap + Doubly Linked List combo
+- Emphasize O(1) operations
+- Discuss thread safety with locks
+- Mention real-world uses (Redis, database buffers)
+
+**For Multi-Level Caching:**
+- Memory (fast) → Disk (persistent) → Network (source of truth)
+- Discuss eviction policies for each level
+- Mention cache invalidation strategies
+- Explain performance trade-offs
+
+**Common Follow-ups:**
+1. "How do you handle race conditions?" → Use actors or locks
+2. "What about cache stampede?" → Use request deduplication
+3. "How do you measure cache hit rate?" → Track hits vs misses
+4. "When would you NOT cache?" → Real-time data, user-specific data
+
+This comprehensive guide covers everything from beginner to tech lead level, with production-ready code suitable for FAANG interviews! 🚀
+

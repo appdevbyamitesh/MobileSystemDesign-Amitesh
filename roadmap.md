@@ -214,5 +214,3 @@ Here's a comprehensive roadmap for mastering both low-level and high-level mobil
 - Draw HLD diagrams (10-15 mins)
 - Deep dive into 2-3 components (15-20 mins)
 - Discuss trade-offs and alternatives
-
-This roadmap takes approximately 18 weeks of dedicated study, with ongoing practice thereafter. Focus on building real projects alongside theoretical learning, as senior interviews expect you to demonstrate practical experience with these concepts.

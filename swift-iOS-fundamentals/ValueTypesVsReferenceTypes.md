@@ -24,7 +24,7 @@ friendToy.color = "Red"  // Friend changes their copy
 print(myToy.color)      // Output: Blue (mine stays Blue!)
 print(friendToy.color)  // Output: Red (friend's is Red)
 
-// REFERENCE TYPE (Class) - Everyone shares the same thing
+// REFERENCE TYPE (Class) - Everyone shares the same 
 class RemoteControlCar {
     var speed: Int
     
