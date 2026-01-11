@@ -52,6 +52,9 @@ Top-tier tech company iOS interviews typically have **4-5 rounds** over 1-2 days
 ✅ Encryption & security
 ```
 
+> 📘 **Deep Dive Guide:**
+> - [Local Data Storage & Persistence](Local_Data_Storage_Persistence_Guide.md)
+
 **Day 2 Afternoon (3 hours): Practice HLD Questions**
 ```
 Practice designing:
