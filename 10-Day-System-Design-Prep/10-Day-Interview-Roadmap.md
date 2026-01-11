@@ -752,6 +752,9 @@ Story: Delivered major feature under tight deadline
 
 ## 📚 Key Resources to Study
 
+> 📘 **Advanced Interview Cheat Sheet:**
+> - [Advanced Interview Cheat Sheet](Advanced_Interview_Cheat_Sheet.md) - Comprehensive guide for Uber, Amazon, Google interviews with HLD patterns, LLD implementations, and company-specific focus areas
+
 **Documentation**
 - Swift Language Guide
 - iOS Concurrency Guide
