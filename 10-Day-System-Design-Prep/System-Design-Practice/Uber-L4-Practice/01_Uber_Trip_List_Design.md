@@ -7,6 +7,26 @@
 
 ---
 
+## 🎯 SCALED Framework Coverage
+
+> [!IMPORTANT]
+> This design follows the **[SCALED framework](./00_SCALED_Framework_Guide.md)** - the industry-standard approach for mobile system design interviews.
+
+| SCALED | Section in This File | What You'll Learn |
+|--------|----------------------|-------------------|
+| **S** - System Requirements | [0-10 min: Requirements](#0-10-min-requirements-clarification) | Functional/non-functional requirements, scope definition |
+| **C** - Design Considerations | [10-25 min: HLD](#10-25-min-high-level-design-hld) | MVVM choice, offline-first strategy, pagination decision |
+| **A** - Architecture | [10-25 min: HLD](#10-25-min-high-level-design-hld) | Layered architecture diagram, data flow |
+| **L** - Low-Level Design | [25-45 min: LLD](#25-45-min-low-level-design-lld) | Swift code, protocols, async/await, error handling |
+| **E** - Evaluating NFRs | [45-55 min: Deep Dives](#45-55-min-deep-dives) | Performance, caching, thread safety, scalability |
+| **D** - API Design | [Part 4: API Design](#part-4-api-design-crucial-for-l4) | RESTful endpoints, offset pagination, mobile optimizations |
+| **T** - Trade-offs | Throughout + [Deep Dives](#45-55-min-deep-dives) | MVVM vs VIPER, offset vs cursor, cache strategies |
+
+> [!TIP]
+> Look for 🎯 markers throughout this file showing where each SCALED principle is applied!
+
+---
+
 ## 0-10 min: Requirements Clarification
 
 ### Questions to Ask Interviewer

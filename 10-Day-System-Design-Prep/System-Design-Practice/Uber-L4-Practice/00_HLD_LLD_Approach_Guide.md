@@ -203,6 +203,162 @@ class TripRepository: TripRepositoryProtocol {
 
 ---
 
+## Phase 3.5: API Design (Integrated Throughout)
+
+### When to Discuss API Design
+
+**You should design APIs during or after HLD, woven into your solution:**
+
+| Interview Phase | API Discussion |
+|----------------|----------------|
+| **Requirements (0-10min)** | Clarify if you're designing the API too ("Should I design both iOS client AND the API?") |
+| **HLD (10-25min)** | Show API endpoints briefly in architecture diagram |
+| **LLD (25-45min)** | **Detail full API design here** - endpoints, pagination, errors |
+| **Deep Dive (45-55min)** | Discuss API versioning, rate limiting, mobile optimizations |
+
+> [!IMPORTANT]
+> Modern iOS system design interviews expect you to design BOTH the client (iOS) and the API. This is critical for Uber L4 level!
+
+### API Design Template
+
+**Always cover these 4 aspects:**
+
+**1. Endpoint Structure**
+```
+GET /v1/resource?param=value
+
+Example:
+GET /v1/trips?page=1&limit=20
+POST /v1/trips
+PUT /v1/trips/{id}
+DELETE /v1/trips/{id}
+```
+
+**2. Pagination Strategy**
+
+Show decision-making:
+```
+"For trip history, I'll use offset-based pagination:
+  - Historical data (trips don't change order)
+  - Users might want page numbers
+  
+But for a feed, I'd use cursor-based:
+  - Real-time data (new posts appear)
+  - Prevents duplicates when scrolling
+"
+```
+
+**3. Error Response Format**
+```json
+{
+  "error": {
+    "code": "RATE_LIMIT_EXCEEDED",
+    "message": "Too many requests",
+    "retryAfter": 60
+  }
+}
+```
+
+**4. Mobile Optimizations**
+- Response compression (gzip)
+- Field selection (`?fields=id,title,date`)
+- CDN URLs for images
+- Batch endpoints for sync
+
+### API Design Example (Trip List)
+
+```
+GET /v1/trips?page=1&limit=20
+
+Response:
+{
+  "data": {
+    "trips": [...],
+    "pagination": {
+      "currentPage": 1,
+      "totalPages": 15,
+      "hasMore": true
+    }
+  }
+}
+
+Why this design:
+✅ Offset pagination works for historical trips
+✅ Include both hasMore (simple) and totalPages (UX flexibility)
+✅ Wrap in "data" envelope for future extensibility
+```
+
+### When Interviewer Asks: "What about the API?"
+
+**Response Template:**
+
+> "Let me design the API to support the iOS client:
+> 
+> **Endpoints:**
+> - GET /v1/trips - List with pagination
+> - GET /v1/trips/{id} - Detail
+> 
+> **Pagination Choice:**
+> [Explain offset vs cursor for this use case]
+> 
+> **Error Handling:**
+> 401 → Refresh token
+> 429 → Rate limit, respect Retry-After
+> 5xx → Retry with exponential backoff
+> 
+> **Mobile Optimizations:**
+> - Compression (Accept-Encoding: gzip)
+> - Conditional requests (ETag)
+> - Field selection for bandwidth savings"
+
+### What to Draw for API Design
+
+```
+┌─────────────────────────────────────┐
+│  iOS Client                         │
+│                                     │
+│  GET /v1/trips?page=1&limit=20      │
+└──────────────┬──────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────┐
+│  API Server                         │
+│                                     │
+│  {                                  │
+│    "data": {                        │
+│      "trips": [...],                │
+│      "pagination": {...}            │
+│    }                                │
+│  }                                  │
+└─────────────────────────────────────┘
+```
+
+### Quick Reference: REST Principles
+
+| Method | Use Case | Idempotent | Cacheable |
+|--------|----------|------------|-----------|
+| GET | Fetch data | ✅ | ✅ |
+| POST | Create resource | ❌ | ❌ |
+| PUT | Replace resource | ✅ | ❌ |
+| PATCH | Partial update | ❌ | ❌ |
+| DELETE | Remove resource | ✅ | ❌ |
+
+### Status Codes to Know
+
+- **200 OK** - Success
+- **201 Created** - POST succeeded
+- **304 Not Modified** - Cache valid
+- **400 Bad Request** - Invalid input
+- **401 Unauthorized** - Auth failed
+- **404 Not Found** - Resource missing
+- **429 Too Many Requests** - Rate limited
+- **500 Internal Error** - Server failure
+
+> [!TIP]
+> Reference the comprehensive [API Design Best Practices Guide](./05_API_Design_Best_Practices.md) for detailed patterns!
+
+---
+
 ## Phase 4: Deep Dives (45-55 min)
 
 ### Common Deep Dive Topics

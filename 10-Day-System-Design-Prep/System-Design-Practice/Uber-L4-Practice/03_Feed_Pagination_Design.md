@@ -1,9 +1,26 @@
 # Feed with Pagination & Caching - Complete iOS System Design
 
 > [!NOTE]
-> This is a 60-minute Uber L4 interview simulation. Problem commonly asked at Meta, Instagram, Twitter/X, LinkedIn.
+> This is a 60-minute Uber L4 interview simulation following the **[SCALED framework](./00_SCALED_Framework_Guide.md)**.
 
-**Problem Statement:** *Design a social media feed (like Instagram, Twitter, or LinkedIn) with infinite scroll pagination, image caching, and smooth performance.*
+---
+
+## 🎯 SCALED Framework Coverage
+
+This design follows the SCALED principles:
+
+| SCALED | Section in This File | What You'll Learn |
+|--------|----------------------|-------------------|
+| **S** - System Requirements | [0-10 min: Requirements](#0-10-min-requirements-clarification) | Feed type, pagination requirements, offline expectations |
+| **C** - Design Considerations | [10-25 min: HLD](#10-25-min-high-level-design-hld) | Cursor pagination choice, image loading strategy |
+| **A** - Architecture | [10-25 min: HLD](#10-25-min-high-level-design-hld) | MVVM + Separate ImageLoader, prefetching design |
+| **L** - Low-Level Design | [25-45 min: LLD](#25-45-min-low-level-design-lld) | FeedViewModel, ImageLoader, LRU cache, prefetching |
+| **E** - Evaluating NFRs | [45-55 min: Deep Dives](#45-55-min-deep-dives) | 60 FPS scrolling, memory limits, image optimization |
+| **D** - API Design | [Part 4: Feed API Design](#part-4-feed-api-design-cursor-based-pagination) | Cursor pagination, field selection, rate limiting, real-time |
+| **T** - Trade-offs | Throughout + [Deep Dives](#45-55-min-deep-dives) | Cursor vs offset, memory vs disk cache, polling vs WebSocket |
+
+> [!TIP]
+> Feed pagination is extremely common at Meta, Instagram, Twitter. Master cursor-based pagination here!
 
 ---
 
@@ -797,6 +814,569 @@ class PostCell: UITableViewCell {
     }
 }
 ```
+
+---
+
+## Part 4: Feed API Design (Cursor-Based Pagination)
+
+### Feed API Endpoints
+
+**You:** "For a social media feed, I need cursor-based pagination for consistency. Here's my API design:"
+
+#### Core Feed Endpoint
+
+```
+GET /v1/feed
+  Query Params:
+    - cursor: String (optional, opaque pagination token)
+    - limit: Int (default: 20, max: 50)
+    - fields: String (optional, comma-separated fields to include)
+  
+  Response: 200 OK
+  {
+    "data": {
+      "posts": [
+        {
+          "id": "post_abc123",
+          "author": {
+            "id": "user_xyz",
+            "username": "johndoe",
+            "displayName": "John Doe",
+            "avatarUrl": "https://cdn.app.com/avatars/xyz_thumb.jpg"
+          },
+          "content": "Just finished an amazing hike!",
+          "imageUrl": "https://cdn.app.com/images/abc123_medium.jpg",
+          "imageThumbnailUrl": "https://cdn.app.com/images/abc123_thumb.jpg",  // Mobile optimization
+          "timestamp": "2026-01-13T15:00:00Z",
+          "stats": {
+            "likeCount": 245,
+            "commentCount": 18,
+            "shareCount": 5
+          },
+          "userEngagement": {
+            "liked": false,
+            "saved": false
+          }
+        }
+      ],
+      "pagination": {
+        "nextCursor": "eyJpZCI6InBvc3RfYWJjMTIzIiwidCI6MTY3MzYyODAwMH0=",  // Base64 encoded
+        "hasMore": true
+      }
+    },
+    "meta": {
+      "serverTimestamp": "2026-01-13T18:00:00Z",
+      "requestId": "req_uuid"
+    }
+  }
+
+GET /v1/posts/{postId}
+  Response: 200 OK (full post details)
+  Response: 404 Not Found
+```
+
+### Why Cursor-Based Pagination?
+
+**Interviewer:** "Why cursor instead of offset for feed?"
+
+**You:** "Critical for feed consistency:
+
+| Scenario | Offset Pagination | Cursor Pagination |
+|----------|-------------------|-------------------|
+| **User scrolls to page 2** | `?page=2&limit=20` | `?cursor=abc&limit=20` |
+| **New post added at top** | Page 2 now has posts 2-21 (was 1-20) | Cursor ensures posts AFTER 'abc' |
+| **Result** | ❌ Duplicate post on page 2 | ✅ No duplicates |
+| **Performance** | `OFFSET 40 LIMIT 20` (slow for large offsets) | `WHERE id < 'abc' LIMIT 20` (indexed, fast) |
+
+**Real example:**
+```
+// User on page 1 (posts 1-20)
+GET /feed?limit=20
+Response: posts [1-20], nextCursor="post_20"
+
+// 5 new posts added while user reads
+
+// User taps "Load More"
+GET /feed?cursor=post_20&limit=20
+// Cursor ensures: fetch posts OLDER than post_20
+// Returns: posts [21-40], NOT [16-35] with duplicates
+```
+
+**Trade-off:** Can't jump to arbitrary page, but feed UX doesn't need that."
+
+### Cursor Implementation
+
+**Server-side cursor encoding:**
+```json
+// Cursor contains: post ID + timestamp
+{
+  "id": "post_abc123",
+  "timestamp": 1673628000
+}
+
+// Base64 encoded: "eyJpZCI6InBvc3RfYWJjMTIzIiwidCI6MTY3MzYyODAwMH0="
+```
+
+**SQL query:**
+```sql
+-- Without cursor (first page)
+SELECT * FROM posts
+ORDER BY timestamp DESC, id DESC
+LIMIT 20;
+
+-- With cursor (subsequent pages)
+SELECT * FROM posts
+WHERE timestamp < '2026-01-13T15:00:00Z'
+   OR (timestamp = '2026-01-13T15:00:00Z' AND id < 'post_abc123')
+ORDER BY timestamp DESC, id DESC
+LIMIT 20;
+```
+
+**iOS client handling:**
+```swift
+struct FeedResponse: Codable {
+    let posts: [Post]
+    let pagination: Pagination
+    
+    struct Pagination: Codable {
+        let nextCursor: String?
+        let hasMore: Bool
+    }
+}
+
+// ViewModel tracks cursor
+var currentCursor: String?
+
+func loadMorePosts() async {
+    let response = try await api.getFeed(cursor: currentCursor, limit: 20)
+    posts.append(contentsOf: response.posts)
+    currentCursor = response.pagination.nextCursor
+}
+```
+
+### Field Selection (Bandwidth Optimization)
+
+**Interviewer:** "How do you minimize response size for mobile?"
+
+**You:** "Field selection pattern:
+
+```
+// Mobile app (light)
+GET /feed?fields=id,author.id,author.username,author.avatarUrl,content,imageThumbnailUrl,timestamp,stats.likeCount
+
+Response:
+{
+  "posts": [
+    {
+      "id": "post_123",
+      "author": {
+        "id": "user_xyz",
+        "username": "johndoe",
+        "avatarUrl": "..."
+      },
+      "content": "...",
+      "imageThumbnailUrl": "...",  // Small 300x300
+      "timestamp": "...",
+      "stats": {"likeCount": 245}
+    }
+  ]
+}
+
+// Detail view (full)
+GET /posts/{id}?fields=* // All fields
+```
+
+**Benefits:**
+- ✅ List view: ~1KB per post (thumbnail URL only)
+- ✅ Full view: ~5KB per post (high-res image, full stats)
+- ✅ Saves 80% bandwidth for feed scrolling
+- **Alternative:** Separate `/v1/feed/light` and `/v1/feed/full` endpoints"
+
+### Image CDN URLs
+
+```json
+{
+  "imageUrl": "https://cdn.app.com/images/{postId}_{size}.jpg",
+  
+  "sizes": {
+    "thumbnail": "https://cdn.app.com/images/abc123_thumb.jpg",    // 300x300
+    "medium": "https://cdn.app.com/images/abc123_medium.jpg",       // 1080x1080
+    "large": "https://cdn.app.com/images/abc123_large.jpg"          // Original
+  }
+}
+```
+
+**iOS client:**
+```swift
+// For list view
+let thumbnailURL = post.sizes.thumbnail
+
+// For detail/fullscreen
+let highResURL = post.sizes.large
+```
+
+### Rate Limiting for Feed
+
+```
+Headers:
+  X-RateLimit-Limit: 100          // Requests per hour
+  X-RateLimit-Remaining: 95
+  X-RateLimit-Reset: 1673640000
+  
+  X-Feed-Refresh-After: 300      // Don't refresh feed more than every 5 min
+```
+
+**iOS client:**
+```swift
+actor FeedRateLimiter {
+    private var lastRefreshTime: Date?
+    private let minRefreshInterval: TimeInterval = 300  // 5 minutes
+    
+    func canRefresh() -> Bool {
+        guard let last = lastRefreshTime else {
+            lastRefreshTime = Date()
+            return true
+        }
+        
+        let elapsed = Date().timeIntervalSince(last)
+        if elapsed >= minRefreshInterval {
+            lastRefreshTime = Date()
+            return true
+        }
+        
+        return false
+    }
+}
+
+// In ViewModel
+func refresh() async {
+    guard await rateLimiter.canRefresh() else {
+        // Show "Please wait before refreshing" message
+        return
+    }
+    
+    await loadInitialFeed()
+}
+```
+
+### Prefetching Optimization
+
+**Server hint for prefetching:**
+```json
+{
+  "posts": [...],
+  "prefetchHints": {
+    "nextPageCursor": "xyz789",
+    "estimatedNextPageSize": 20,
+    "prefetchRecommended": true  // Server suggests prefetch
+  }
+}
+```
+
+**iOS client:**
+```swift
+if response.prefetchHints.prefetchRecommended {
+    // Prefetch next page in background
+    Task.detached(priority: .utility) {
+        try? await fetchFeed(cursor: response.prefetchHints.nextPageCursor)
+    }
+}
+```
+
+### Caching Headers
+
+```
+Response Headers:
+  Cache-Control: private, max-age=60        // Cache feed for 1 minute
+  ETag: "feed_version_abc123"
+  Last-Modified: Mon, 13 Jan 2026 15:00:00 GMT
+  Vary: Accept-Encoding, Authorization       // Cache per user
+
+Conditional Request:
+  If-None-Match: "feed_version_abc123"
+  If-Modified-Since: Mon, 13 Jan 2026 15:00:00 GMT
+
+Response: 304 Not Modified (use cache)
+```
+
+### Error Responses
+
+```json
+// Empty feed (new user)
+{
+  "data": {
+    "posts": [],
+    "pagination": {
+      "nextCursor": null,
+      "hasMore": false
+    }
+  },
+  "meta": {
+    "emptyState": {
+      "reason": "no_following",
+      "message": "Follow users to see their posts",
+      "action": {
+        "label": "Discover People",
+        "url": "/discover"
+      }
+    }
+  }
+}
+
+// Invalid cursor
+{
+  "error": {
+    "code": "INVALID_CURSOR",
+    "message": "Pagination cursor is invalid or expired",
+    "retryable": false,
+    "action": "Restart from beginning by omitting cursor parameter"
+  }
+}
+
+// Content blocked
+{
+  "data": {
+    "posts": [
+      {
+        "id": "post_123",
+        "contentBlocked": true,
+        "reason": "This post was removed for violating guidelines",
+        "timestamp": "2026-01-13T15:00:00Z"
+      }
+    ]
+  }
+}
+```
+
+### Real-Time Updates (Pull-to-Refresh)
+
+**Interviewer:** "How would you add real-time feed updates?"
+
+**You:** "Two approaches:
+
+**1. Poll with 'since' parameter:**
+```
+GET /feed/updates?since=2026-01-13T15:00:00Z
+
+Response:
+{
+  "newPosts": [
+    // Posts added since timestamp
+  ],
+  "updatedPosts": [
+    // Like counts, comment counts changed
+  ],
+  "deletedPostIds": ["post_xyz"]
+}
+```
+
+**iOS implementation:**
+```swift
+// Background poll every 30 seconds
+timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
+    Task {
+        let updates = try? await api.getFeedUpdates(since: lastUpdateTime)
+        
+        if let new = updates?.newPosts, !new.isEmpty {
+            // Show "5 new posts" banner
+            showNewPostsBanner(count: new.count)
+        }
+    }
+}
+```
+
+**2. WebSocket (Real-time):**
+```
+// Connect to WebSocket
+ws://api.app.com/feed/stream
+
+// Server pushes events
+{
+  "event": "new_post",
+  "data": {
+    "postId": "post_new",
+    "insertPosition": 0  // Add at top
+  }
+}
+
+{
+  "event": "post_updated",
+  "data": {
+    "postId": "post_123",
+    "stats": {"likeCount": 250}  // Updated count
+  }
+}
+```
+
+**Trade-offs:**
+- **Polling:** Simple, battery-friendly (30s interval)
+- **WebSocket:** Real-time, but constant connection (battery drain)
+- **My choice:** Polling for feed, WebSocket for messaging/notifications"
+
+### Bi-Directional Scroll API
+
+**Future enhancement:**
+```
+// Load newer posts (pull down at top)
+GET /feed/newer?cursor=post_abc123&limit=20
+
+// Load older posts (scroll down)
+GET /feed/older?cursor=post_abc123&limit=20
+// Same as GET /feed?cursor=post_abc123
+```
+
+### API Versioning
+
+```swift
+// Client specifies supported content types
+Headers:
+  Accept: application/vnd.app.v2+json
+  X-Client-Version: 2.5.0
+
+// Server response includes compatibility
+{
+  "data": {...},
+  "meta": {
+    "apiVersion": "2",
+    "schemaVersion": "2.1",
+    "deprecations": [
+      {
+        "field": "imageUrl",
+        "replacedBy": "sizes.medium",
+        "sunsetDate": "2026-06-01"
+      }
+    ]
+  }
+}
+```
+
+### Mobile-Specific Optimizations
+
+**1. Adaptive Quality**
+```
+Headers:
+  X-Network-Type: cellular  // or wifi
+  X-Data-Saver: true        // User enabled data saver
+
+Server response:
+{
+  "posts": [
+    {
+      "imageUrl": "https://cdn.app.com/images/abc123_low.jpg",  // Lower quality on cellular
+      "videoUrl": null  // Exclude videos when data saver enabled
+    }
+  ]
+}
+```
+
+**2. Batch Prefetch**
+```
+POST /v1/feed/batch-prefetch
+{
+  "cursors": ["cursor1", "cursor2", "cursor3"]  // Prefetch 3 pages
+}
+
+Response:
+{
+  "pages": [
+    {"cursor": "cursor1", "posts": [...]},
+    {"cursor": "cursor2", "posts": [...]},
+    {"cursor": "cursor3", "posts": [...]}
+  ]
+}
+```
+
+**3. Compression**
+```
+Request Headers:
+  Accept-Encoding: gzip, br  // Brotli preferred
+
+Response:
+  Content-Encoding: br
+  // 70-80% smaller payload
+```
+
+### Interview Q&A: Feed API Design
+
+**Q:** "Why include `userEngagement.liked` in feed response?"
+
+**A:**
+> "To avoid N+1 queries:
+> 
+> **Without it:**
+> ```swift
+> // Fetch feed
+> let posts = await api.getFeed()
+> 
+> // For each post, check if user liked (20 requests!)
+> for post in posts {
+>     post.liked = try await api.checkIfLiked(postId: post.id)
+> }
+> ```
+> 
+> **With it:**
+> ```sql
+> -- Server query
+> SELECT posts.*, 
+>        EXISTS(SELECT 1 FROM likes 
+>               WHERE post_id = posts.id 
+>               AND user_id = current_user.id) AS liked
+> FROM posts;
+> ```
+> 
+> Single query, all engagement data included. Essential for mobile performance."
+
+**Q:** "How do you handle deleted posts in cursor pagination?"
+
+**A:**
+> "Two approaches:
+> 
+> **1. Soft delete (my choice):**
+> ```json
+> {
+>   \"id\": \"post_deleted\",
+>   \"status\": \"deleted\",
+>   \"content\": null,
+>   \"timestamp\": \"...\"
+> }
+> ```
+> Maintains cursor integrity, client filters out deleted posts
+> 
+> **2. Skip deleted, may return fewer items:**
+> ```
+> Request: ?cursor=abc&limit=20
+> Response: 18 posts (2 were deleted)
+> Client handles variable page sizes
+> ```
+> 
+> Soft delete is more reliable for pagination consistency."
+
+**Q:** "What if cursor expires (server clears old data)?"
+
+**A:**
+> "Graceful degradation:
+> 
+> ```
+> Response: 410 Gone
+> {
+>   \"error\": {
+>     \"code\": \"CURSOR_EXPIRED\",
+>     \"message\": \"Pagination cursor has expired\",
+>     \"suggestion\": \"Restart from beginnin
+
+g by calling /feed without cursor\"
+>   }
+> }
+> ```
+> 
+> iOS client:
+> ```swift
+> if error.code == \"CURSOR_EXPIRED\" {
+>     // Clear feed, restart from top
+>     currentCursor = nil
+>     await loadInitialFeed()
+> }
+> ```"
 
 ---
 

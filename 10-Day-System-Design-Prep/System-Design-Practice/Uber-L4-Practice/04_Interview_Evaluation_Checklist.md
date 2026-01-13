@@ -86,6 +86,22 @@
 
 ---
 
+### Category 7: API Design (10 points) 🆕
+
+| Criteria | Points | Self-Score |
+|----------|--------|------------|
+| Designed RESTful endpoints with proper HTTP methods | 2 | __/2 |
+| Chose appropriate pagination strategy (cursor vs offset) with justification | 3 | __/3 |
+| Showed error response format and handling (4xx, 5xx codes) | 2 | __/2 |
+| Discussed mobile-specific optimizations (compression, field selection) | 2 | __/2 |
+| Mentioned API versioning or backwards compatibility | 1 | __/1 |
+| **Total** | **10** | __/10** |
+
+> [!NOTE]
+> **NEW!** API Design is now expected at Uber L4. If you didn't discuss APIs at all, you scored 0/10 here.
+
+---
+
 ## Overall Score
 
 | Category | Max | Your Score |
@@ -96,7 +112,8 @@
 | Deep Technical Knowledge | 20 | __ |
 | Communication & Problem Solving | 15 | __ |
 | Trade-offs & Alternatives | 10 | __ |
-| **TOTAL** | **100** | **__/100** |
+| **API Design** 🆕 | **10** | **__** |
+| **TOTAL** | **110** | **__/110** |
 
 ---
 
@@ -104,11 +121,14 @@
 
 | Score | Level | Interpretation |
 |-------|-------|----------------|
-| **85-100** | 🟢 Strong Hire | Exceeds Uber L4 expectations, likely L5 performance |
-| **70-84** | 🟢 Hire | Solid L4, would pass interview |
-| **60-69** | 🟡 Borderline | Needs improvement in 1-2 areas, might pass |
-| **50-59** | 🔴 No Hire | Significant gaps, needs more practice |
-| **< 50** | 🔴 Strong No Hire | Not ready for L4 interviews |
+| **94-110** | 🟢 Strong Hire | Exceeds Uber L4 expectations, likely L5 performance |
+| **77-93** | 🟢 Hire | Solid L4, would pass interview |
+| **66-76** | 🟡 Borderline | Needs improvement in 1-2 areas, might pass |
+| **55-65** | 🔴 No Hire | Significant gaps, needs more practice |
+| **< 55** | 🔴 Strong No Hire | Not ready for L4 interviews |
+
+> [!TIP]
+> **Note:** Scoring scale updated to 110 points total (added API Design category)
 
 ---
 

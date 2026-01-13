@@ -1,9 +1,29 @@
-# Offline-First Architecture - Complete iOS System Design
+P# Offline-First Architecture - Complete iOS System Design
 
 > [!NOTE]
 > This is a 60-minute Uber L4 interview simulation focused on designing an offline-first mobile app architecture.
 
 **Problem Statement:** *Design an iOS app architecture that works seamlessly offline and syncs data when online. Example: A note-taking app like Evernote or a task manager like Todoist.*
+
+---
+
+## 🎯 SCALED Framework Coverage
+
+> [!IMPORTANT]
+> This design follows the **[SCALED framework](./00_SCALED_Framework_Guide.md)** - demonstrating advanced mobile engineering for offline-first apps.
+
+| SCALED | Section in This File | What You'll Learn |
+|--------|----------------------|-------------------|
+| **S** - System Requirements | [0-10 min: Requirements](#0-10-min-requirements-clarification) | Offline CRUD, sync requirements, conflict scenarios |
+| **C** - Design Considerations | [10-25 min: HLD](#10-25-min-high-level-design-hld) | Offline-first vs online-first, sync engine design |
+| **A** - Architecture | [10-25 min: HLD](#10-25-min-high-level-design-hld) | Repository + Sync Engine architecture, CoreData layer |
+| **L** - Low-Level Design | [25-45 min: LLD](#25-45-min-low-level-design-lld) | CoreData models, Sync queue, Conflict resolver |
+| **E** - Evaluating NFRs | [45-55 min: Deep Dives](#45-55-min-deep-dives) | Reliability (network failures), consistency (conflicts) |
+| **D** - API Design | [Part 4: Sync API Design](#part-4-sync-api-design-offline-first) | Delta sync, batch operations, idempotency, versioning |
+| **T** - Trade-offs | Throughout + [Deep Dives](#45-55-min-deep-dives) | Last-write-wins vs CRDTs, optimistic vs pessimistic locking |
+
+> [!CAUTION]
+> Offline-first is considered an advanced L4/L5 topic. Master this to stand out!
 
 ---
 
@@ -654,6 +674,474 @@ class NetworkReachability {
     }
 }
 ```
+
+---
+
+## Part 4: Sync API Design (Offline-First)
+
+### Task Management API Endpoints
+
+**You:** "For offline-first architecture, I need to design sync-friendly APIs. Here's my approach:"
+
+#### Core CRUD Endpoints
+
+```
+GET /v1/tasks
+  Query Params:
+    - since: ISO8601 timestamp (optional, for delta sync)
+    - limit: Int (default: 100)
+  
+  Response: 200 OK
+  {
+    "data": {
+      "tasks": [
+        {
+          "id": "task_abc123",
+          "title": "Buy groceries",
+          "isCompleted": false,
+          "createdAt": "2026-01-13T10:00:00Z",
+          "updatedAt": "2026-01-13T15:30:00Z",
+          "version": 3
+        }
+      ],
+      "syncMetadata": {
+        "serverTimestamp": "2026-01-13T18:00:00Z",
+        "hasMore": false
+      }
+    }
+  }
+
+POST /v1/tasks
+  Request:
+  {
+    "title": "Buy groceries",
+    "isCompleted": false,
+    "clientId": "uuid-client-generated",  // For idempotency
+    "clientTimestamp": "2026-01-13T15:30:00Z"
+  }
+  
+  Response: 201 Created
+  {
+    "data": {
+      "id": "task_abc123",  // Server-generated ID
+      "title": "Buy groceries",
+      "isCompleted": false,
+      "createdAt": "2026-01-13T15:30:00Z",
+      "updatedAt": "2026-01-13T15:30:00Z",
+      "version": 1
+    }
+  }
+
+PUT /v1/tasks/{id}
+  Request:
+  {
+    "title": "Buy groceries and cook dinner",
+    "isCompleted": false,
+    "version": 1,  // For optimistic locking
+    "clientTimestamp": "2026-01-13T16:00:00Z"
+  }
+  
+  Response: 200 OK (updated)
+  Response: 409 Conflict (version mismatch)
+  {
+    "error": {
+      "code": "VERSION_CONFLICT",
+      "message": "Task was modified by another client",
+      "currentVersion": 2,
+      "serverData": { /* latest task data */ }
+    }
+  }
+
+DELETE /v1/tasks/{id}
+  Response: 204 No Content
+```
+
+### Delta Sync API (Bandwidth Optimization)
+
+**Interviewer:** "How do you minimize data transfer for sync?"
+
+**You:** "I use delta sync with timestamps:
+
+```
+GET /v1/tasks?since=2026-01-13T10:00:00Z
+
+// Only returns tasks modified after timestamp
+Response:
+{
+  "data": {
+    "tasks": [
+      {"id": "task_abc", "updatedAt": "2026-01-13T11:00:00Z", ...}
+    ],
+    "deletedTaskIds": ["task_xyz"],  // Deleted since last sync
+    "syncMetadata": {
+      "serverTimestamp": "2026-01-13T18:00:00Z"
+    }
+  }
+}
+```
+
+**Benefits:**
+- ✅ Only transfers changed data (not all 500 tasks)
+- ✅ Includes deletions (server knows what client should remove)
+- ✅ Client stores server timestamp for next sync
+- **Trade-off:** Server must track deletions (soft delete with tombstones)"
+
+### Batch Sync API (Battery Optimization)
+
+```
+POST /v1/sync/batch
+Request:
+{
+  "operations": [
+    {"type": "create", "clientId": "uuid1", "data": {...}},
+    {"type": "update", "id": "task_abc", "version": 1, "data": {...}},
+    {"type": "delete", "id": "task_xyz"}
+  ],
+  "lastSyncTimestamp": "2026-01-13T10:00:00Z"
+}
+
+Response:
+{
+  "results": [
+    {"clientId": "uuid1", "success": true, "serverId": "task_new"},
+    {"id": "task_abc", "success": false, "error": {"code": "VERSION_CONFLICT"}},
+    {"id": "task_xyz", "success": true}
+  ],
+  "deltaUpdates": {
+    "tasks": [ /* tasks changed on server since lastSyncTimestamp */ ],
+    "deletedTaskIds": ["task_old"]
+  },
+  "serverTimestamp": "2026-01-13T18:00:00Z"
+}
+```
+
+**Why Batch API:**
+- ✅ Single network call instead of N operations
+- ✅ Saves battery (fewer radio wake-ups)
+- ✅ Atomic - all-or-nothing transaction
+- ✅ Returns delta updates in same response
+
+### Conflict Resolution API Pattern
+
+**Interviewer:** "How does the API handle conflicts?"
+
+**You:** "Two approaches:
+
+**1. Optimistic Locking (Version-based):**
+```swift
+// Client sends version number
+PUT /v1/tasks/123
+{
+  "title": "Updated",
+  "version": 1  // Client's current version
+}
+
+// Server response
+409 Conflict {
+  "error": {
+    "code": "VERSION_CONFLICT",
+    "message": "Version mismatch",
+    "currentVersion": 2,
+    "serverData": { /* latest task */ }
+  }
+}
+
+// iOS client handling
+if response.statusCode == 409 {
+    let serverVersion = error.currentVersion
+    let serverData = error.serverData
+    
+    // Resolve conflict
+    let resolved = conflictResolver.resolve(local: localTask, remote: serverData)
+    
+    // Retry with new version
+    try await updateTask(resolved, version: serverVersion)
+}
+```
+
+**2. Timestamp-based (Last-Write-Wins):**
+```
+PUT /v1/tasks/123
+{
+  "title": "Updated",
+  "updatedAt": "2026-01-13T15:00:00Z"
+}
+
+// Server compares timestamps
+if request.updatedAt > server.updatedAt:
+    accept update
+else:
+    return 409 Conflict with server data
+```
+
+**Trade-offs:**
+- **Version-based:** More reliable, prevents lost updates
+- **Timestamp-based:** Simpler, but clock sync issues
+- **My choice:** Version-based for data integrity"
+
+### Idempotency Strategy
+
+```
+POST /v1/tasks
+Headers:
+  Idempotency-Key: uuid-client-generated
+
+// Server stores idempotency key
+// If client retries with same key:
+//   - Return 200 OK with original created resource
+//   - Don't create duplicate
+
+Response:
+{
+  "data": { /* task that was created */ },
+  "meta": {
+    "idempotent": true  // Indicates this was a retry
+  }
+}
+```
+
+**iOS Implementation:**
+```swift
+func createTask(_ task: Task) async throws -> Task {
+    let idempotencyKey = UUID().uuidString
+    var request = URLRequest(url: apiURL)
+    request.setValue(idempotencyKey, forHTTPHeaderField: "Idempotency-Key")
+    
+    // If network fails and client retries, server won't create duplicate
+    return try await performRequest(request)
+}
+```
+
+### Sync State API
+
+```
+GET /v1/sync/status
+Response:
+{
+  "lastSyncTimestamp": "2026-01-13T10:00:00Z",
+  "pendingChanges": 5,
+  "conflictsNeedingResolution": 2,
+  "serverVersion": "2.1.0"
+}
+```
+
+**Use case:** Show sync status in UI
+
+### API Versioning for Sync
+
+**Interviewer:** "How do you handle API changes for offline-first apps?"
+
+**You:** "Very carefully! Offline apps can't force updates:
+
+**Versioning Strategy:**
+```swift
+// Client sends supported API version
+Headers:
+  X-API-Version: 2
+  X-Client-Version: 1.5.0
+
+// Server responds with compatibility
+{
+  "data": {...},
+  "meta": {
+    "apiVersion": "2",
+    "minSupportedClientVersion": "1.4.0",
+    "deprecationNotices": [
+      {
+        "feature": "syncV1",
+        "sunsetDate": "2026-06-01",
+        "migrationGuide": "https://..."
+      }
+    ]
+  }
+}
+```
+
+**Backwards Compatibility Rules:**
+1. Support N-1 API versions (current + previous)
+2. Never remove fields, only deprecate
+3. New required fields → make optional initially
+4. Give 6-month notice for breaking changes
+
+**iOS client handling:**
+```swift
+if meta.minSupportedClientVersion > currentAppVersion {
+    showForceUpdateDialog()
+} else if meta.deprecationNotices.isNotEmpty {
+    logDeprecationWarning()
+}
+```"
+
+### Error Responses for Sync
+
+```json
+// Network timeout during sync
+{
+  "error": {
+    "code": "SYNC_INTERRUPTED",
+    "message": "Sync was interrupted, safe to retry",
+    "retryable": true,
+    "lastSuccessfulOperation": 3  // Client can resume from operation 4
+  }
+}
+
+// Server in maintenance mode
+{
+  "error": {
+    "code": "SERVICE_UNAVAILABLE",
+    "message": "Server maintenance in progress",
+    "retryAfter": 300,  // 5 minutes
+    "estimatedDuration": "15 minutes"
+  }
+}
+
+// Account quota exceeded
+{
+  "error": {
+    "code": "QUOTA_EXCEEDED",
+    "message": "Free tier allows 100 tasks, you have 105",
+    "currentUsage": 105,
+    "limit": 100,
+    "upgradeUrl": "https://..."
+  }
+}
+```
+
+### Authentication for Background Sync
+
+```swift
+// Long-lived refresh token for background sync
+class BackgroundSyncAuth {
+    func getBackgroundSyncToken() async throws -> String {
+        // Use refresh token that doesn't expire
+        let refreshToken = keychain.get("refresh_token")
+        
+        // Exchange for short-lived access token
+        let accessToken = try await authAPI.refresh(refreshToken)
+        
+        return accessToken
+    }
+}
+
+// API request with background token
+var request = URLRequest(url: syncURL)
+request.setValue("Bearer \(bgToken)", forHTTPHeaderField: "Authorization")
+request.setValue("background", forHTTPHeaderField: "X-Sync-Context")  // Hint to server
+```
+
+### Mobile-Specific Optimizations
+
+**1. Compression for Sync Payloads**
+
+```
+POST /v1/sync/batch
+Headers:
+  Content-Encoding: gzip
+  Accept-Encoding: gzip
+
+// Both request and response are compressed
+// Typical compression: 70-80% size reduction for JSON
+```
+
+**2. Lightweight Endpoint for Status Check**
+
+```
+HEAD /v1/sync/status
+Response Headers:
+  X-Has-Updates: true
+  X-Pending-Count: 5
+  X-Last-Sync: 2026-01-13T10:00:00Z
+
+// No body, just headers (saves bandwidth)
+// Client can decide whether to full sync
+```
+
+### Interview Q&A: Sync API Design
+
+**Q:** "Why separate endpoints for batch vs individual operations?"
+
+**A:**
+> "Flexibility for different scenarios:
+> 
+> **Individual endpoints** (`POST /tasks`, `PUT /tasks/{id}`):
+> - Real-time updates when online
+> - Simple, RESTful
+> - Better for debugging
+> 
+> **Batch endpoint** (`POST /sync/batch`):
+> - Background sync (queued operations)
+> - Single network call (battery efficient)
+> - Atomic transactions
+> 
+> Client chooses based on context:
+> ```swift
+> if isOnline && !isBackgroundSync {
+>     // Individual call
+>     try await api.createTask(task)
+> } else {
+>     // Queue for batch sync
+>     syncQueue.enqueue(operation)
+> }
+> ```"
+
+**Q:** "How do you prevent sync storms (all clients syncing at once)?"
+
+**A:**
+> "Several strategies:
+> 
+> **1. Jittered sync intervals:**
+> ```swift
+> let baseInterval = 300  // 5 minutes
+> let jitter = Int.random(in: 0...60)  // 0-60 seconds
+> let actualInterval = baseInterval + jitter
+> ```
+> 
+> **2. Server-side rate limiting:**
+> ```
+> Response: 429 Too Many Requests
+> Retry-After: 45  // Stagger retries
+> ```
+> 
+> **3. Exponential backoff on conflict:**
+> ```swift
+> if conflict { retryAfter = 2^attemptCount }
+> ```
+> 
+> **4. Server pushes sync schedule:**
+> ```json
+> {
+>   \"suggestedSyncInterval\": 600,  // 10 min instead of 5
+>   \"reason\": \"high_server_load\"
+> }
+> ```"
+
+**Q:** "What if user makes changes on 3 devices while offline?"
+
+**A:**
+> "Multi-device conflict resolution:
+> 
+> **Scenario:** User edits task title on Phone, iPad, Mac (all offline)
+> 
+> **All come online simultaneously:**
+> 1. Server receives 3 PUT requests
+> 2. First one wins (version 1 → 2)
+> 3. Others get 409 Conflict
+> 4. Clients fetch server version
+> 5. Last-write-wins based on `updatedAt` timestamp
+> 6. Losing clients resubmit if their timestamp is newer
+> 
+> **Better approach:** Version vectors (complex but no data loss)
+> ```json
+> {
+>   \"version\": {
+>     \"phone\": 3,
+>     \"ipad\": 2,
+>     \"mac\": 1
+>   }
+> }
+> ```
+> 
+> But for tasks, last-write-wins is acceptable."
 
 ---
 
