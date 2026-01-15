@@ -1,6 +1,8 @@
 # iOS Low-Level Design (LLD) Practice — Amazon Interview Prep
 
 > **Comprehensive LLD problems using the RESHADED framework for iOS engineers**
+> 
+> **NEW: Interview Scripts Guide with word-by-word explanations of what to say!**
 
 ---
 
@@ -19,6 +21,9 @@
 | `08_Notification_System.md` | Notifications | Observer, Strategy, Factory | ⭐⭐⭐ |
 | `09_Meeting_Room_Booking.md` | Room Booking | Facade, Strategy | ⭐⭐⭐ |
 | `10_Social_Media_Feed.md` | Feed System | Strategy, Observer, Facade | ⭐⭐⭐⭐ |
+| `11_Feed_Image_Loader.md` | Image Loader | Facade, Strategy, Caching | ⭐⭐⭐⭐⭐ |
+| `12_Interview_Scripts_Guide.md` | **🎤 Interview Scripts** | Word-by-word explanations | Essential |
+
 
 ---
 
